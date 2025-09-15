@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Ice Cream Truck Tracker</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css" />
+  <style>
+    html,body,#map { height: 100%; margin:0; padding:0; }
+    #map { height: 100vh; }
+    #debug {
+      position: absolute; top: 8px; right: 8px;
+      background: rgba(255,255,255,0.95);
+      padding: 8px 10px; border-radius: 6px;
+      max-width: 380px; font-family: monospace; z-index: 10000;
+      font-size: 13px;
+    }
+    @keyframes blink { 0%{opacity:1}50%{opacity:0}100%{opacity:1} }
+    .blinking-truck {
+      width: 80px; height: 80px;
+      background: url('assets/truck.png') no-repeat center center;
+      background-size: contain;
+      animation: blink 1s infinite;
+    }
+  </style>
+</head>
+<body>
+  <div id="map"></div>
+  <div id="debug">Debug: initializing…</div>
+
+  <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
+  <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
+  <script>
+    const debugDiv = document.getElementById("debug");
+    function dbg(s){ console.log(s); debugDiv.innerHTML = "Debug:<br>" + s.replace(/\n/g,"<br>"); }
+
+    // init map
+    const map = L.map('map').setView([43.7, -79.4], 13);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      attribution: '© OpenStreetMap contributors'
+    }).addTo(map);
+
+    // compute socket.io path that works with proxies like /proxy/3000/
+    // If location.pathname is '/proxy/3000/' -> path = '/proxy/3000/socket.io'
+    const basePath = location.pathname.endsWith('/') ? location.pathname.slice(0,-1) : location.pathname;
+    const socketPath = basePath + '/socket.io';
+
+    dbg(`location.origin=${location.origin}\nlocation.pathname=${location.pathname}\nsocketPath=${socketPath}`);
+
+    // Connect to same origin but make sure path goes through subpath (useful for proxies)
+    const socket = io(location.origin, {
+      path: socketPath,
+      transports: ['websocket','polling'], // try websocket, fallback to polling
+      timeout: 20000
+    });
+
+    const truckMarkers = {};
+
+    // blinking truck div-icon
+    const truckIcon = L.divIcon({
+      className: 'blinking-truck',
+      iconSize: [80,80],
+      iconAnchor: [40,40],
+      popupAnchor: [0,-40]
+    });
+
+    socket.on('connect', () => {
+      dbg("Connected: socket id=" + socket.id);
+    });
+
+    socket.on('connect_error', (err) => {
+      dbg("connect_error: " + (err && err.message ? err.message : String(err)));
+      console.error('connect_error', err);
+    });
+
+    socket.on('disconnect', (reason) => {
+      dbg("Disconnected: " + reason);
+      console.log('disconnect', reason);
+    });
+
+    socket.on('trucks', (trucks) => {
+      dbg("Received trucks: " + JSON.stringify(trucks));
+      trucks.forEach(t => {
+        if (truckMarkers[t.id]) {
+          truckMarkers[t.id].setLatLng([t.lat, t.lng]);
+        } else {
+          const m = L.marker([t.lat, t.lng], { icon: truckIcon }).addTo(map)
+            .bindPopup(`<b>${t.id}</b><br/>lat:${t.lat.toFixed(5)} lng:${t.lng.toFixed(5)}`);
+          truckMarkers[t.id] = m;
+          // if first truck, zoom in
+          if (Object.keys(truckMarkers).length === 1) {
+            map.setView([t.lat, t.lng], 15);
+            m.openPopup();
+          }
+        }
+      });
+      // optional: always fit to bounds of trucks
+      const keys = Object.keys(truckMarkers);
+      if (keys.length > 0) {
+        const group = keys.map(k => truckMarkers[k].getLatLng());
+        const bounds = L.latLngBounds(group);
+        map.fitBounds(bounds.pad(0.25));
+      }
+    });
+  </script>
+</body>
+</html>
